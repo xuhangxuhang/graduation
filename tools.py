@@ -79,7 +79,7 @@ def get_accuracy(y_true,y_pred):
     return accuracy
 
 def get_loss(y_true,y_pred):
-    if len(y_pred.shape) == 2: y_true = np.eye(2)[devel]
+    if len(y_pred.shape) == 2: y_true = np.eye(2)[y_true]
     return log_loss(y_true,y_pred,eps=1e-7)
 
 def get_auc(y_true,y_pred):
