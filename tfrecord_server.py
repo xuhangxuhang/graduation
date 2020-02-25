@@ -139,8 +139,7 @@ def decode_tfrecord(filenames,
                     normalize_method=2,
                     perform_shuffle=False,
                     repeat_count=None,
-                    one_hot=False,
-                    n_class=2):
+                    one_hot=False):
     '''
     input:  filenames--tfrecord file name
             perform_shuffle--True means shuffle, False means no shuffle
@@ -167,19 +166,18 @@ def decode_tfrecord(filenames,
             v_max, v_min = tf.reduce_max(frame), tf.reduce_min(frame)
             frame = (frame-v_min)/(v_max-v_min)
             return frame
-
-        if method==0:
-            norm_func = tf.image.per_image_standardization()
-            normalized = tf.map_fn(fn=lambda frame:norm_func(frame), elems=tensor,dtype=tf.float32)
-
-        elif method==1: mean, variance = tf.nn.moments(tensor[0],axes=[0,1,2])
-
-        elif method==2: mean, variance = tf.nn.moments(tensor,axes=[0,1,2,3])
-
+        
+        if method==1: 
+            normalized = tf.image.per_image_standardization(tensor)
+            
+        elif method==2: 
+            mean, variance = tf.nn.moments(tensor,axes=[0,1,2,3])
+            stddev = tf.sqrt(variance)
+            normalized = (tensor-mean)/stddev
+            
         else: raise ValueError('the method you are using is not considered, please choose from 0-2 !!!')
 
-        stddev = tf.sqrt(variance)
-        normalized = tf.map_fn(fn=lambda frame:norm_func(frame), elems=tensor,dtype=tf.float32)
+        normalized = tf.map_fn(fn=lambda frame:norm_func(frame), elems=normalized,dtype=tf.float32)
 
         return tf.squeeze(normalized)
     
@@ -201,15 +199,18 @@ def decode_tfrecord(filenames,
         depth = parsed_features['depth']
         
         face_images = [tf.decode_raw(parsed_features['frame/{:04d}'.format(count)],tf.uint8) for count in range(frame_nb)]
+        print(face_images)
         face_images = [tf.reshape(face,[height,width,depth]) for face in face_images]
+        print(face_images)
         face_images = [tf.image.resize_nearest_neighbor(tf.expand_dims(face,axis=0),[128,128]) for face in face_images]
-        
+        print(face_images)
         face_images = tf.squeeze(face_images)
+        print(face_images)
         face_images = normalize_tensor(face_images,method=normalize_method)
-        
         face_images = tf.reshape(face_images,[frame_nb,128,128,3])
+        
 
-        if one_hot and n_class: 
+        if one_hot: 
             label = tf.one_hot(label,n_class)
         else:
             label = tf.expand_dims(label,axis=-1)
