@@ -13,6 +13,7 @@ from os.path import splitext, basename
 import matplotlib.pyplot as pl
 
 
+
 def data_to_tfrecord(total_video_crop_csv,to_file=None):
     """for each csv file contains train,test,devel information we write tfrecord of each subset, 
     first shuffle each subset, then in each subset write tfrecord line by line"""
