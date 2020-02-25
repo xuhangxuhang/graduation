@@ -32,6 +32,7 @@ def train(**kwargs):
     epoch = int(kwargs['epoch'])
     gpuId = str(kwargs['gpuid'])
     frame_nb = kwargs['frame_nb']
+    classes = int(kwargs['classes'])
     
     os.environ["CUDA_VISIBLE_DEVICES"] = gpuId
     
@@ -96,7 +97,7 @@ def train(**kwargs):
             metrics_names = ['acc','loss','eer','auc']
             results = [acc,pred_loss,equal_error_rate,auc]
             
-            metrics_str = '\n'
+            metrics_str = ' '
             for result, name in zip(results, metrics_names):
                 metric_name = self.metrics_prefix + '_' + name
                 logs[metric_name] = result
@@ -113,18 +114,24 @@ def train(**kwargs):
             self.num_steps = steps
             self.label = label
             self.metrics_prefix = metrics_prefix
-            
-        metrics_names = ['acc','loss','eer','auc']
 
         def on_epoch_end(self, epoch, logs={}):
+            metrics_names = ['acc','loss','eer','auc']
             if int(epoch)%10!=0:
                 self.verbose=0
-                y_pred = np.asarray((np.inf,np.inf,np.inf,np.inf))
+                results = np.asarray((np.inf,np.inf,np.inf,np.inf))
+                
             else:    
                 self.test_model.set_weights(self.model.get_weights())
-                y_pred = self.test_model.evaluate(None, None, steps=int(self.num_steps),verbose=self.verbose)
-            metrics_str = '\n'
-            for result, name in zip(y_pred, metrics_names):
+                y_pred = self.test_model.predict(None, None, steps=int(self.num_steps),verbose=self.verbose)
+                acc = get_accuracy(self.label,y_pred)
+                pred_loss = get_loss(self.label,y_pred)
+                equal_error_rate, _ = get_eer(self.label,y_pred)
+                auc = get_auc(self.label,y_pred)
+                results = [acc,pred_loss,equal_error_rate,auc]
+                
+            metrics_str = ' '
+            for result, name in zip(results, metrics_names):
                 metric_name = self.metrics_prefix + '_' + name
                 logs[metric_name] = result
                 if self.verbose > 0:
@@ -134,48 +141,30 @@ def train(**kwargs):
     
     if not exists(savedir): os.makedirs(savedir)
     
+    
+    one_hot = True if classes ==2 else False
     # load data
-    train_data, train_label = decode_tfrecord(filenames=train_tfrecord,batch_size=batch_size,one_hot=False)
-    devel_data, devel_label = decode_tfrecord(filenames=devel_tfrecord,batch_size=batch_size,one_hot=False)
-    test_data, test_label = decode_tfrecord(filenames=test_tfrecord,batch_size=batch_size,one_hot=False)
+    train_data, train_label = decode_tfrecord(filenames=train_tfrecord,batch_size=batch_size,one_hot=one_hot)
+    devel_data, devel_label = decode_tfrecord(filenames=devel_tfrecord,batch_size=batch_size,one_hot=one_hot)
+    test_data, test_label = decode_tfrecord(filenames=test_tfrecord,batch_size=batch_size,one_hot=one_hot)
 
     metrics = {'predict':['acc']}
     
     print(train_label)
     
     # gene models
-    train_model = Arch(model_input=Input(tensor=train_data),block_nb=model_depth,classes=1)
-    devel_model = Arch(model_input=Input(tensor=devel_data),block_nb=model_depth,classes=1)
-    test_model  = Arch(model_input=Input(tensor=test_data),block_nb=model_depth,classes=1)
+    train_model = Arch(model_input=Input(tensor=train_data),block_nb=model_depth,classes=classes)
+    devel_model = Arch(model_input=Input(tensor=devel_data),block_nb=model_depth,classes=classes)
+    test_model  = Arch(model_input=Input(tensor=test_data),block_nb=model_depth,classes=classes)
     
+    print(train_label)
+    print(train_model.output)
     
-#     embedding_data_func = decode_tfrecord(filenames=test_tfrecord,batch_size=100,repeat_count=1,one_hot=True)
-#     with tf.Session() as sess:
-#         embedding_data = sess.run(embedding_data_func)
-#     print('successfully unpacked embedding data...')
-    
-#     tb = TensorBoard(log_dir=savedir+'/model_depth_{}_tensorboard_logs'.format(model_depth),
-#                 write_images=False,histogram_freq=1,write_graph=False)
-#     embedding_layer_names = [train_model.layers[-6].name,train_model.layers[-1].name]
-#     tb_dir = savedir+'/model_depth_{}_tensorboard_logs'.format(model_depth)
-#     if not exists(tb_dir): os.makedirs(tb_dir)
-    
-#     with open(join(tb_dir, 'metadata.tsv'), 'w') as f:
-#         np.savetxt(f, embedding_data[1])
-#     tb = TensorBoard(log_dir=tb_dir,
-#                      write_images=True,
-#                      write_graph=True,
-#                      write_grads=True,
-#                      embeddings_freq=2,
-#                      embeddings_layer_names=embedding_layer_names,
-#                      embeddings_metadata='metadata.tsv',
-#                      embeddings_data=embedding_data[0])
-    
-    loss = {'predict':'binary_crossentropy'}
+    loss_str = 'categorical_crossentropy' if classes==2 else 'binary_crossentropy'
+    loss = {'predict':loss_str}
     train_target_tensor = {'predict':train_label}
     train_model.compile(optimizer=Adam(lr=1e-3),loss=loss,metrics=metrics,target_tensors=train_target_tensor)
     
-
     devel_target_tensor = {'predict':devel_label}
     devel_model.compile(optimizer=Adam(lr=1e-3),loss=loss,metrics=metrics,target_tensors=devel_target_tensor)
     
@@ -199,8 +188,8 @@ def train(**kwargs):
     history = train_model.fit(steps_per_epoch=train_steps_per_epoch,
                               epochs=epoch,
                               verbose=1,
-                              callbacks=[Learning_rate_decay,devel_callback
-                                         ,test_callback,csv_logger,
+                              callbacks=[Learning_rate_decay,devel_callback,
+                                         test_callback,csv_logger,
                                          ckp_by_epoch,
                                          ckp_by_perform])
 
