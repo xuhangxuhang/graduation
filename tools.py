@@ -7,25 +7,23 @@ def get_tfrecord_sample_nb(tfrecord):
 
 def get_eer(y_true,y_pred):
     '''https://github.com/maciej3031/whale-recognition-challenge/blob/30a9ef774ef344916bbc8dce4229fa005d346a64/utils/performance_utils.py#L310'''
-    if len(y_pred.shape)==2: y_pred = np.amax(y_pred,axis=1)
-    far, tpr, thrd = roc_curve(y_true,y_pred,pos_label=0)
+    fpr, tpr, thrd = roc_curve(y_true,y_pred,pos_label=1)
     frr = 1 - tpr
-    index_eer = np.argmin(abs(far - frr))
-    eer = (far[index_eer] + frr[index_eer])/2
+    index_eer = np.argmin(abs(fpr - frr))
+    eer = (fpr[index_eer] + frr[index_eer])/2
     eer_thrd = thrd[index_eer]
     return eer, eer_thrd
 
 def get_hter(y_true,y_pred,eer_thd=None):
     '''please input eer_thd, else eer of test set will be calculated'''
-    if len(y_pred.shape)==2: y_pred = np.amax(y_true,axis=1)
-    far, tpr, thrd = roc_curve(y_true,y_pred,pos_label=0)
+    fpr, tpr, thrd = roc_curve(y_true,y_pred,pos_label=1)
     frr = 1 - tpr
     if eer_thd is None:
-        index = np.argmin(abs(far - frr))
-        hter = min((far[index]+frr[index])/2)
+        index = np.argmin(abs(fpr - frr))
+        hter = min((fpr[index]+frr[index])/2)
     else:
         hter_thrd = thrd[np.argmin(thrd-eer_thd)]
-        hter = (far[hter_thrd]+frr[hter_thrd])/2
+        hter = (fpr[hter_thrd]+frr[hter_thrd])/2
     return hter
 
 def apcer_bpcer_acer(y_true,y_pred,PAI_type_1_idxs,PAI_type_2_idxs):
@@ -36,7 +34,6 @@ def apcer_bpcer_acer(y_true,y_pred,PAI_type_1_idxs,PAI_type_2_idxs):
     
     return apcer, bpcer and acer
     '''
-    if len(y_pred.shape)==2: y_pred = np.argmax(y_pred,axis=1)
 
     bona = 0  # 活脸标签为0
     attack = 1  # 非活脸标签为1
@@ -74,14 +71,12 @@ def apcer_bpcer_acer(y_true,y_pred,PAI_type_1_idxs,PAI_type_2_idxs):
     
 
 def get_accuracy(y_true,y_pred):
-    if len(y_pred.shape)==2: y_pred = np.argmax(y_pred,axis=1)
+    y_pred = np.round(y_pred)
     accuracy = accuracy_score(y_true,y_pred)
     return accuracy
 
 def get_loss(y_true,y_pred):
-    if len(y_pred.shape) == 2: y_true = np.eye(2)[y_true]
     return log_loss(y_true,y_pred,eps=1e-7)
 
 def get_auc(y_true,y_pred):
-    if len(y_pred.shape)==2:y_pred = np.amax(y_pred,axis=1)
-    return roc_auc_curve(y_true,y_pred)
+    return roc_auc_score(y_true,y_pred)
