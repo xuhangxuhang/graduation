@@ -7,7 +7,7 @@ from keras.callbacks import Callback, ModelCheckpoint, CSVLogger
 from keras.optimizers import Adam
 from keras.metrics import categorical_accuracy
 from keras.layers import Input
-from keras.callbacks import TensorBoard
+from keras.backend.tensorflow_backend import set_session
 
 from tfrecord_server import decode_tfrecord,_pd_shuffle
 from model import Arch
@@ -23,6 +23,7 @@ from tools import get_tfrecord_sample_nb
 
 from tools import get_eer, get_accuracy, get_loss, get_auc
 
+
 def train(**kwargs):
 
     interval = kwargs['interval']
@@ -33,14 +34,29 @@ def train(**kwargs):
     gpuId = str(kwargs['gpuid'])
     frame_nb = kwargs['frame_nb']
     classes = int(kwargs['classes'])
+    do_validate_flag = bool(int(kwargs['do_val_flag']))
+    
+    
+    
+    msg1 = 'use validation'
+    msg2 = 'drop valitaion'
+    if do_validate_flag: print(msg1)
+    else: print(msg2)
+    
+    '''这个do_validation_flag是用来应对CASIA-FASD这种不带验证集的情况的
+        如果有验证集，我们在训练的每个epoch之后在验证集中得出EER和ACC等指标，
+            再在每经过10epoch训练后再测试集中得出指标（当然这个指标只是看是否在测试集中overfitting，不会用于模型调参）
+        如果没有验证集，每轮训练后直接的错测试集的指标，这个指标只用于观察，不用于模型选型和调试参数等'''
     
     os.environ["CUDA_VISIBLE_DEVICES"] = gpuId
     
     train_tfrecord = glob('{}/frames-{}/tfrcd/frames-{}-{}-interval-{}*.tfrecord'.format(base_dir,frame_nb,frame_nb,'train',interval))[0]
-    devel_tfrecord = glob('{}/frames-{}/tfrcd/frames-{}-{}-interval-{}*.tfrecord'.format(base_dir,frame_nb,frame_nb,'devel',interval))[0]
-    test_tfrecord = glob('{}/frames-{}/tfrcd/frames-{}-{}-interval-{}*.tfrecord'.format(base_dir,frame_nb,frame_nb,'test',interval))[0]
-    
-    
+    if not do_validate_flag:
+        test_tfrecord = glob('{}/frames-{}/tfrcd/frames-{}-{}-interval-{}*.tfrecord'.format(base_dir,frame_nb,frame_nb,'test',interval))[0]
+    else:
+        devel_tfrecord = glob('{}/frames-{}/tfrcd/frames-{}-{}-interval-{}*.tfrecord'.format(base_dir,frame_nb,frame_nb,'devel',interval))[0]
+        test_tfrecord = glob('{}/frames-{}/tfrcd/frames-{}-{}-interval-{}*.tfrecord'.format(base_dir,frame_nb,frame_nb,'test',interval))[0]
+        
     savedir = '{}/results/frames-{}/depth-{}'.format(base_dir,frame_nb,model_depth)
     if not os.path.exists(savedir): os.makedirs(savedir)
     
@@ -49,14 +65,14 @@ def train(**kwargs):
     
     
     #Callbacks
-    csv_logger = CSVLogger(savedir+'/model_depth_{}_training.log'.format(model_depth))
-    ckp_by_epoch = ModelCheckpoint(savedir+'/{epoch:03d}-{devel_loss:.5f}.hdf5',
+    callback_csv_logger = CSVLogger(savedir+'/model_depth_{}_training.log'.format(model_depth))
+    callback_ckp_by_epoch = ModelCheckpoint(savedir+'/{epoch:03d}-{devel_loss:.5f}.hdf5',
                                        verbose=1,
                                        monitor='devel_loss',
                                        save_best_only=False,
                                        period=20,# save weights after fixed epochs
                                        mode='min')
-    ckp_by_perform = ModelCheckpoint(savedir+'/{epoch:03d}-{devel_loss:.5f}.hdf5',
+    callback_ckp_by_perform = ModelCheckpoint(savedir+'/{epoch:03d}-{devel_loss:.5f}.hdf5',
                                        verbose=1,
                                        monitor='devel_loss',
                                        save_best_only=True,
@@ -74,7 +90,7 @@ def train(**kwargs):
         lrate = max(lrate,lr_minim)
         return lrate
     
-    Learning_rate_decay = LearningRateScheduler(lr_decay,verbose=0)
+    callback_lr_decay = LearningRateScheduler(lr_decay,verbose=0)
     
     
     class EvaluateInputTensor(Callback):
@@ -141,57 +157,48 @@ def train(**kwargs):
     
     if not exists(savedir): os.makedirs(savedir)
     
+    loss_str = 'categorical_crossentropy' if classes==2 else 'binary_crossentropy'
+    metrics = {'predict':['acc']}
+    loss = {'predict':loss_str}
+    
     
     one_hot = True if classes ==2 else False
-    # load data
+    
     train_data, train_label = decode_tfrecord(filenames=train_tfrecord,batch_size=batch_size,one_hot=one_hot)
-    devel_data, devel_label = decode_tfrecord(filenames=devel_tfrecord,batch_size=batch_size,one_hot=one_hot)
-    test_data, test_label = decode_tfrecord(filenames=test_tfrecord,batch_size=batch_size,one_hot=one_hot)
-
-    metrics = {'predict':['acc']}
-    
-    print(train_label)
-    
-    # gene models
     train_model = Arch(model_input=Input(tensor=train_data),block_nb=model_depth,classes=classes)
-    devel_model = Arch(model_input=Input(tensor=devel_data),block_nb=model_depth,classes=classes)
-    test_model  = Arch(model_input=Input(tensor=test_data),block_nb=model_depth,classes=classes)
-    
-    print(train_label)
-    print(train_model.output)
-    
-    loss_str = 'categorical_crossentropy' if classes==2 else 'binary_crossentropy'
-    loss = {'predict':loss_str}
     train_target_tensor = {'predict':train_label}
     train_model.compile(optimizer=Adam(lr=1e-3),loss=loss,metrics=metrics,target_tensors=train_target_tensor)
+    train_data = get_tfrecord_sample_nb(train_tfrecord)    
+    train_steps_per_epoch = train_data//batch_size
+    train_steps_per_epoch = 10
     
-    devel_target_tensor = {'predict':devel_label}
-    devel_model.compile(optimizer=Adam(lr=1e-3),loss=loss,metrics=metrics,target_tensors=devel_target_tensor)
-    
+    test_data, test_label = decode_tfrecord(filenames=test_tfrecord,batch_size=batch_size,one_hot=one_hot)
+    test_model  = Arch(model_input=Input(tensor=test_data),block_nb=model_depth,classes=classes)    
     test_target_tensor = {'predict':test_label}
     test_model.compile(optimizer=Adam(lr=1e-3),loss=loss,metrics=metrics,target_tensors=test_target_tensor)
-
-    train_data = get_tfrecord_sample_nb(train_tfrecord)
-    train_steps_per_epoch = train_data//batch_size
-    
-    devel_data = get_tfrecord_sample_nb(devel_tfrecord)
-    devel_steps_per_epoch = devel_data//batch_size
-    
     test_data = get_tfrecord_sample_nb(test_tfrecord)
     test_steps_per_epoch = test_data//batch_size
+    test_steps_per_epoch = 10
+    
+    if do_validate_flag:
+        devel_data, devel_label = decode_tfrecord(filenames=devel_tfrecord,batch_size=batch_size,one_hot=one_hot)
+        devel_model = Arch(model_input=Input(tensor=devel_data),block_nb=model_depth,classes=classes)    
+        devel_data = get_tfrecord_sample_nb(devel_tfrecord)    
+        devel_steps_per_epoch = devel_data//batch_size  
+        devel_steps_per_epoch = 10
+        devel_target_tensor = {'predict':devel_label}
+        devel_model.compile(optimizer=Adam(lr=1e-3),loss=loss,metrics=metrics,target_tensors=devel_target_tensor)
+        callback_devel = EvaluateInputTensor(model=devel_model,steps=devel_steps_per_epoch,label=_pd_shuffle(label_df,'devel'))
+        callback_test = TestInputTensor(model=test_model,steps=test_steps_per_epoch,label=_pd_shuffle(label_df,'test'))
+        callbacks = [callback_devel,callback_test,callback_csv_logger,callback_ckp_by_epoch,callback_ckp_by_perform]
+    else:
+        callback_test = EvaluateInputTensor(model=test_model,steps=test_steps_per_epoch,label=_pd_shuffle(label_df,'test'))
+        callbacks = [callback_test,callback_csv_logger,callback_ckp_by_epoch,callback_ckp_by_perform]
     
     
-    devel_callback = EvaluateInputTensor(model=devel_model,steps=devel_steps_per_epoch,label=_pd_shuffle(label_df,'devel'))
-    test_callback = TestInputTensor(model=test_model,steps=test_steps_per_epoch,label=_pd_shuffle(label_df,'test'))
         
     print('start training...')
-    history = train_model.fit(steps_per_epoch=train_steps_per_epoch,
-                              epochs=epoch,
-                              verbose=1,
-                              callbacks=[Learning_rate_decay,devel_callback,
-                                         test_callback,csv_logger,
-                                         ckp_by_epoch,
-                                         ckp_by_perform])
+    history = train_model.fit(steps_per_epoch=train_steps_per_epoch,epochs=epoch,verbose=1,callbacks=callbacks)
 
     train_model.save_weights(savedir+'/final_model.hdf5')
     pd.to_pickle(history,savedir+'/history.pkl')
